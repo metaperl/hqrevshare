@@ -2,21 +2,21 @@
 
 
 from __future__ import print_function
-
 # Core
 import collections
 from functools import wraps
 import logging
 import pprint
 import random
+import re
 import time
 import ConfigParser
+from decimal import *
 
 # Third-Party
 import argh
-
 from clint.textui import progress
-import funcy
+import html2text
 from PIL import Image
 from splinter import Browser
 from selenium.webdriver.common.action_chains import ActionChains
@@ -45,8 +45,9 @@ action_path = dict(
     view_ads='member/surf.php',
     dashboard='Dot_MembersPage.asp',
     withdraw='DotwithdrawForm.asp',
-    buy_pack='purchase.php'
-)
+    buy_pack='purchase.php',
+    transfer_balance='transfer_rbalance.php'
+    )
 
 one_minute = 60
 three_minutes = 3 * one_minute
@@ -62,6 +63,8 @@ def loop_forever():
     while True:
         pass
 
+def get_outer_html(driver, elem):
+    return driver.execute_script("return arguments[0].outerHTML;", elem)
 
 def clear_input_box(box):
     box.type(Keys.CONTROL + "e")
@@ -80,9 +83,11 @@ def click_element_with_offset(driver, elem, x, y):
     action.click()
     action.perform()
 
+
 def page_source(browser):
     document_root = browser.driver.page_source
     return document_root
+
 
 def wait_visible(driver, locator, by=By.XPATH, timeout=300):
     """
@@ -201,11 +206,13 @@ class Entry(object):
         button = self.browser.find_by_id('login')
         button.click()
 
-
-    def maybe_robot_login(self):
-        if wait_visible(self.browser.driver, "//div[@class='alert alert-danger']", timeout=10):
-            self.browser.find_by_name('Username').type(self._username)
-            self.browser.find_by_name('Password').type("{0}\t".format(self._password))
+        link_elem = wait_visible(self.browser.driver, "//a[@title='Close']", timeout=30)
+        if link_elem:
+            logging.info("close button ={0}".format(link_elem))
+            link_elem.click()
+        else:
+            logging.info("No close button.")
+            self.login()
 
     def browser_visit(self, action_label):
         try:
@@ -256,12 +263,34 @@ class Entry(object):
         for _ in progress.bar(range(time_to_wait_on_ad)):
             time.sleep(1)
 
-    def buy_pack(self):
-        self.browser_visit('buy_pack')
-        # self.browser.find_by_name('qty[18]').first.type("1")
-        self.browser.select('processor[18]', "3")  # Solid Trust Pay for the win
-        self.browser.find_by_xpath('//input[@type="submit"]').click()
+    def transfer_balance(self):
+        self.browser_visit('transfer_balance')
 
+        account_balance_elem = self.browser.find_by_id("myTabContent").first
+        account_balance_html = get_outer_html(self.browser.driver, account_balance_elem._element)
+        account_balance_text = html2text.HTML2Text().handle(account_balance_html)
+        floating_point_regexp = re.compile('\d+\.\d+')
+        main, repurchase = [Decimal(f) for f in floating_point_regexp.findall(account_balance_text)][0:2]
+        self._balance = dict(
+            main=main, repurchase=repurchase
+        )
+        pp = pprint.PrettyPrinter(indent=4)
+        pp.pprint(self._balance)
+        self.browser.find_by_xpath("//input")[1].type(
+            "{0}\n".format(main))
+
+
+    def buy_pack(self):
+        logging.info("Buy_pack...")
+        self.transfer_balance()
+        self.browser_visit('buy_pack')
+
+        select = ui.Select(
+            wait_visible(self.browser.driver, "paymentmethod", By.ID)
+        )
+        select.select_by_visible_text("Repurchase Balance")
+        i = self.browser.find_by_name('withdrawAmt')
+        self.browser.find_by_xpath('//input[@type="submit"]').click()
 
     def calc_account_balance(self):
         time.sleep(1)
@@ -295,23 +324,6 @@ class Entry(object):
         # for i, e in enumerate(elem):
         #     print("{0}, {1}".format(i, e.text))
 
-    def solve_captcha(self):
-        time.sleep(3)
-
-        t = page_source(self.browser).encode('utf-8').strip()
-        # print("Page source {0}".format(t))
-
-        captcha = funcy.re_find(
-            """ctx.strokeText\('(\d+)'""", t)
-
-        # print("CAPTCHA = {0}".format(captcha))
-
-        self.browser.find_by_name('codeSb').fill(captcha)
-
-        time.sleep(6)
-        button = self.browser.find_by_name('Submit')
-        button.click()
-
 
 def main(conf, surf=False, buy_pack=False, stay_up=False, surf_amount=12):
     config = ConfigParser.ConfigParser()
@@ -322,9 +334,12 @@ def main(conf, surf=False, buy_pack=False, stay_up=False, surf_amount=12):
     with Browser() as browser:
         browser.driver.set_window_size(1200, 1100)
         browser.driver.set_window_position(300, 0)
+        browser.driver.set_page_load_timeout(60)
+
         e = Entry(username, password, browser)
 
         e.login()
+        logging.info("LOgin complete.")
 
         if buy_pack:
             e.buy_pack()
