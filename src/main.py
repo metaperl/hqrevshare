@@ -200,6 +200,12 @@ class Entry(object):
 
         self.browser_visit('login')
 
+        for i in progress.bar(range(60)):
+            sleep(random() * 0.2)
+
+        for i in progress.dots(range(60)):
+            sleep(random() * 0.2)
+
         self.browser.find_by_name('username').type(self._username)
         self.browser.find_by_name('password').type("{0}\t".format(self._password))
 
@@ -334,7 +340,7 @@ def main(conf, surf=False, buy_pack=False, stay_up=False, surf_amount=12):
     with Browser() as browser:
         browser.driver.set_window_size(1200, 1100)
         browser.driver.set_window_position(300, 0)
-        browser.driver.set_page_load_timeout(60)
+        browser.driver.set_page_load_timeout(160)
 
         e = Entry(username, password, browser)
 
